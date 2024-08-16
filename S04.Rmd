@@ -1,0 +1,246 @@
+---
+title: "S04"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Load Data
+```{r, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(imputeTS)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(gridExtra)
+library(kableExtra)
+library(scales)
+library(openxlsx)
+library(urca)
+library(purrr)
+
+
+
+data <- read.csv("Data Set for Class.csv", stringsAsFactors = FALSE)
+```
+
+# Data Cleaning and Preprocessing
+
+```{r}
+S04 <- data %>% 
+  mutate(date = as.Date(SeriesInd, origin = '1899-12-30')) %>%
+  filter(SeriesInd < 43022 & category == 'S04') %>% 
+  select(SeriesInd, date, category, Var01, Var02)
+```
+
+# Handle missing data
+```{r}
+
+S04$Var01 <- na_interpolation(S04$Var01)
+S04$Var02 <- na_interpolation(S04$Var02)
+
+glimpse(S04)
+```
+# Visualize Data
+```{r}
+
+ggplot(S04, aes(x = Var01)) + 
+  geom_histogram(bins = 50, color = 'black', fill = 'orange') + 
+  ggtitle("  S04-Var01 Histogram Distribution")
+
+ggplot(S04, aes(x = Var02)) + 
+  geom_histogram(bins = 30, color = 'black', fill = 'lightblue') + 
+  scale_x_continuous(labels = scales::comma) + 
+  ggtitle("  S04-Var02 Histogram Distribution")
+
+ggplot(S04, aes(x = "", y = Var01)) + 
+  geom_boxplot(fill = 'orange', color = 'black') + 
+  ggtitle("S04-Var01 Box Plot")
+
+ggplot(S04, aes(x = "", y = Var02)) + 
+  geom_boxplot(fill = 'lightblue', color = 'black') + 
+  ggtitle("S04-Var02 Box Plot")
+```
+
+Variable 01 data has multiple peaks
+
+Variable 02 is right skewed with many outliers.
+
+# Detect and replace outliers
+
+```{r}
+outliers_var2 <- tsoutliers(S04$Var02)
+outliers_var2
+S04$Var02[outliers_var2$index] <- outliers_var2$replacements
+```
+
+# Decomposition
+```{r, warning=FALSE}
+
+ts_var1 <- ts(S04$Var01, start = 2010, frequency = 365)
+ts_var2 <- ts(S04$Var02, start = 2010, frequency = 365)
+autoplot(decompose(ts_var1, type = "multiplicative")) + ggtitle("S04 Var01 Decomposition\n increasing trend with clear seasonality")
+autoplot(decompose(ts_var2, type = "multiplicative")) + ggtitle("S04 Var02 Decomposition\n trend with pontential seasonality")
+```
+
+# Differencing and Stationarity Checks
+## KPSS Test/ACF PLOTS
+```{r}
+Var01_diff <- diff(S04$Var01)
+S04$Var01_diff <- c(NA, Var01_diff)
+ur.kpss(S04$Var01) %>% summary()
+ur.kpss(S04$Var01_diff, type = "mu") %>% summary()
+
+# KPSS Test and differencing for Var02
+Var02_diff <- diff(S04$Var02)
+S04$Var02_diff <- c(NA, Var02_diff)
+ur.kpss(S04$Var02) %>% summary()
+ur.kpss(S04$Var02_diff, type = "mu") %>% summary()
+
+# ACF Plot for differenced values
+ggtsdisplay(S04$Var01_diff, main="ACF Plot for Differenced Var01")
+ggtsdisplay(S04$Var02_diff, main="ACF Plot for Differenced Var02")
+```
+
+The code checks if the data is smooth (stationary) or bumpy (non-stationary). This is because most forecasting models assume that the time series is stationary, we check to ensure accurate prediction. 
+
+The critical value for the KPSS test at the 5% significance level is 0.463. For Var01 and Var02, initial test statistics (14.6813, 2.1448) indicate non-stationarity; after differencing (0.1262, 0.0062), data is stationary.
+
+We check if the data is bumpy or smooth. Big numbers mean bumpy, small numbers mean smooth. After fixing, the numbers are small, so it's smooth.
+
+
+
+```{r}
+
+nsdiffs(ts(S04$Var01, frequency = 365))
+nsdiffs(ts(S04$Var02, frequency = 365))
+```
+It's good practice to check for remaining seasonality using nsdiffs(), the 0 indicates NO seasonal patterns are left.
+
+# Model Building-ARIMA, ETS
+```{r}
+# Fit ARIMA model using auto.arima
+# Splitting Data into Training & Validation Sets
+break_num <- floor(nrow(S04) * 0.8)
+train <- S04[1:break_num,]
+val <- S04[(break_num + 1):nrow(S04),]
+
+# Model Fitting using differenced data
+# ARIMA models
+fit_var01_auto <- Arima(train$Var01,order=c(3,1,3), seasonal=c(2,1,2))
+fit_var02_auto <- auto.arima(train$Var02, seasonal=TRUE)
+
+# ETS models
+fit_var01_ets <- ets(train$Var01, model='ZZZ')
+fit_var02_ets <- ets(train$Var02, model="ZZZ")
+
+summary(fit_var01_auto)
+summary(fit_var01_ets)
+summary(fit_var02_auto)
+summary(fit_var02_ets)
+
+```
+
+# Forecasting on Validation Data & Select Best Model
+
+
+```{r}
+# Forecasting on Validation Data
+forecast_var01_auto_val <- forecast(fit_var01_auto, h = nrow(val))
+forecast_var01_ets_val <- forecast(fit_var01_ets, h = nrow(val))
+forecast_var02_auto_val <- forecast(fit_var02_auto, h = nrow(val))
+forecast_var02_ets_val <- forecast(fit_var02_ets, h = nrow(val))
+
+# Function to calculate accuracy
+calculate_accuracy <- function(forecast, actual) {
+  accuracy(forecast, actual)
+}
+
+# Calculate accuracy for each forecast
+accuracy_var01_auto_val <- calculate_accuracy(forecast_var01_auto_val, val$Var01)
+accuracy_var01_ets_val <- calculate_accuracy(forecast_var01_ets_val, val$Var01)
+accuracy_var02_auto_val <- calculate_accuracy(forecast_var02_auto_val, val$Var02)
+accuracy_var02_ets_val <- calculate_accuracy(forecast_var02_ets_val, val$Var02)
+
+# Combine results into a single data frame
+accuracy_results <- bind_rows(
+  data.frame(Model = "ARIMA_Var01", RMSE = accuracy_var01_auto_val["Test set", "RMSE"], MAPE = accuracy_var01_auto_val["Test set", "MAPE"]),
+  data.frame(Model = "ETS_Var01", RMSE = accuracy_var01_ets_val["Test set", "RMSE"], MAPE = accuracy_var01_ets_val["Test set", "MAPE"]),
+  data.frame(Model = "ARIMA_Var02", RMSE = accuracy_var02_auto_val["Test set", "RMSE"], MAPE = accuracy_var02_auto_val["Test set", "MAPE"]),
+  data.frame(Model = "ETS_Var02", RMSE = accuracy_var02_ets_val["Test set", "RMSE"], MAPE = accuracy_var02_ets_val["Test set", "MAPE"])
+)
+
+# Display results
+accuracy_results
+
+# Residuals Check
+checkresiduals(fit_var01_auto)
+checkresiduals(fit_var01_ets)
+checkresiduals(fit_var02_auto)
+
+```
+
+
+RMSE (Root Mean Squared Error): Imagine throwing a ball at a target. RMSE tells you how far your throws are from the target, on average. Smaller numbers mean you are closer to the target more often.
+
+MAPE (Mean Absolute Percentage Error): Think about how much you miss the target compared to how far you threw the ball. Smaller percentages mean your throws are more accurate.
+
+
+Model Selection:
+
+Var01: Choose ARIMA(3,1,3) because it has better RMSE and MAPE, and good residual diagnostics(P-values)
+
+Var02: Choose ARIMA(2,1,1) because it has better RMSE and MAPE on validation sets, and good residual diagnostics(P-value, indicating no significant autocorrelation in residuals)
+
+No autocorrelation means the errors are random, so the model's predictions are more reliable.
+
+# Retrain the selected model with entire training set.
+```{r}
+# Refit the selected models on the entire dataset
+
+fit_var01_final <- Arima(S04$Var01,order=c(3,1,3), seasonal=c(2,1,2))
+fit_var02_final <- auto.arima(S04$Var02, seasonal=TRUE)
+```
+
+
+# Forecast140P
+```{r}
+# Forecast Var01
+
+forecast_var01_auto <- forecast(fit_var01_final, h = 140)
+
+# Forecast Var02
+forecast_var02_auto <- forecast(fit_var02_final, h = 140)
+
+# Plot forecasts
+autoplot(forecast_var01_auto) + ggtitle("S04 Var01 \n ARIMA 140 periods Forecast")
+
+autoplot(forecast_var02_auto) + ggtitle("S04 Var02 \n ARIMA 140 periods Forecast")
+
+```
+
+# Export Forecast
+```{r}
+# Filter the data for SeriesIND >= 43022 and sort it
+prediction_label_S04 <- data %>% filter(SeriesInd >= 43022 & category == 'S04') %>%
+  arrange(SeriesInd) %>%
+  select(SeriesInd)
+
+# Create a data frame with forecasted values for the next 140 periods for S04
+forecast_data <- data.frame(
+  SeriesInd = prediction_label_S04$SeriesInd,
+  category = rep("S04", 140),
+  Var01 = forecast_var01_auto$mean,
+  Var02 = forecast_var02_auto$mean
+)
+
+
+forecast_data
+write.csv(forecast_data, "S04_140PeriodForecast.csv", row.names = FALSE)
+
+```
+

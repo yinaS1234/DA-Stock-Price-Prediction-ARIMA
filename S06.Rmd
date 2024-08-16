@@ -1,0 +1,262 @@
+---
+title: "S06"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Load Data
+```{r, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(imputeTS)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(gridExtra)
+library(kableExtra)
+library(scales)
+library(openxlsx)
+library(urca)
+library(purrr)
+
+
+
+data <- read.csv("Data Set for Class.csv", stringsAsFactors = FALSE)
+```
+
+# Data Cleaning and Preprocessing
+
+```{r}
+S06 <- data %>% 
+  mutate(date = as.Date(SeriesInd, origin = '1899-12-30')) %>%
+  filter(SeriesInd < 43022 & category == 'S06') %>% 
+  select(SeriesInd, date, category, Var05, Var07)
+
+```
+
+# Handle missing data
+```{r}
+
+S06$Var05 <- na_interpolation(S06$Var05)
+S06$Var07 <- na_interpolation(S06$Var07)
+
+glimpse(S06)
+```
+# Visualize Data
+```{r}
+
+ggplot(S06, aes(x = Var05)) + 
+  geom_histogram(bins = 50, color = 'black', fill = 'orange') + 
+  ggtitle("  S06-Var05 Histogram Distribution")
+
+ggplot(S06, aes(x = Var07)) + 
+  geom_histogram(bins = 30, color = 'black', fill = 'lightblue') + 
+  scale_x_continuous(labels = scales::comma) + 
+  ggtitle("  S06-Var07 Histogram Distribution")
+
+
+ggplot(S06, aes(x = "", y = Var05)) + 
+  geom_boxplot(fill = 'orange', color = 'black') + 
+  ggtitle("S06-Var05 Box Plot")
+
+ggplot(S06, aes(x = "", y = Var07)) + 
+  geom_boxplot(fill = 'lightblue', color = 'black') + 
+  ggtitle("S06-Var07 Box Plot")
+```
+
+Both Var05 and Var07: a clustered distribution between 40 and 60 and a are high value outliner. 
+
+
+
+# Detect and replace outliers
+```{r}
+threshold <- 100
+outliers_var05_index <- which(S06$Var05 > threshold)
+outliers_var05_replacements <- mean(S06$Var05, na.rm = TRUE) 
+
+S06$Var05[outliers_var05_index] <- outliers_var05_replacements
+
+outliers_var05_index
+outliers_var05_replacements
+
+
+
+
+outliers_var07 <- tsoutliers(S06$Var07)
+outliers_var07
+S06$Var07[outliers_var07$index] <- outliers_var07$replacements
+
+```
+
+
+# Decomposition
+```{r, warning=FALSE}
+
+ts_var05 <- ts(S06$Var05, start = 2010, frequency = 365.25)
+ts_var07 <- ts(S06$Var07, start = 2010, frequency = 365.25)
+autoplot(decompose(ts_var05, type = "multiplicative")) + ggtitle("S06 Var05 Decomposition\n Upward trend with clear seasonality")
+autoplot(decompose(ts_var07, type = "multiplicative")) + ggtitle("S06 Var07 Decomposition\n Upward trend with clear seasonality")
+```
+
+# Differencing and Stationarity Checks
+## KPSS Test/ACF PLOTS
+```{r}
+Var05_diff <- diff(S06$Var05)
+S06$Var05_diff <- c(NA, Var05_diff)
+ur.kpss(S06$Var05) %>% summary()
+ur.kpss(S06$Var05_diff, type = "mu") %>% summary()
+
+# KPSS Test and differencing for Var07
+Var07_diff <- diff(S06$Var07)
+S06$Var07_diff <- c(NA, Var07_diff)
+ur.kpss(S06$Var07) %>% summary()
+ur.kpss(S06$Var07_diff, type = "mu") %>% summary()
+
+# ACF Plot for differenced values
+ggtsdisplay(S06$Var05_diff, main="ACF Plot for Differenced Var05")
+ggtsdisplay(S06$Var07_diff, main="ACF Plot for Differenced Var07")
+```
+
+The code checks if the data is smooth (stationary) or bumpy (non-stationary). This is because most forecasting models assume that the time series is stationary, we check to ensure accurate prediction. 
+
+or the KPSS test, the critical value at the 5% significance level is 0.463.
+For Var05 and Var07, initial test statistics (16.7284, 16.7348) indicate non-stationarity; after differencing (0.0966, 0.1001), data is stationary.
+
+The ACF and PACF plots reconfirmed that.  After differencing, the ACF and PACF plots for Var05 & Var07 show no significant spikes.  Data is stable after differencing, lag patterns look fine.
+
+
+
+
+```{r}
+
+nsdiffs(ts(S06$Var05, frequency = 365))
+nsdiffs(ts(S06$Var07, frequency = 365))
+```
+It's good practice to check for remaining seasonality using nsdiffs(), the 0 indicates NO seasonal differencing required.
+
+
+
+# Model Building-ARIMA, ETS
+```{r}
+# Fit ARIMA model using auto.arima
+# Splitting Data into Training & Validation Sets
+break_num <- floor(nrow(S06) * 0.8)
+train <- S06[1:break_num,]
+val <- S06[(break_num + 1):nrow(S06),]
+
+
+# ARIMA models
+fit_Var05_auto <- Arima(train$Var05, c(3,1,2), seasonal = c(1,0,1), include.drift = TRUE)
+fit_Var07_auto <- Arima(train$Var07, order = c(3,1,2), seasonal = c(1,0,1), include.drift = TRUE)
+
+
+# ETS models
+fit_Var05_ets <- ets(train$Var05, model="ZZZ")
+fit_Var07_ets <- ets(train$Var07, model="ZZZ")
+
+summary(fit_Var05_auto)
+summary(fit_Var05_ets)
+summary(fit_Var07_auto)
+summary(fit_Var07_ets)
+
+```
+
+# Forecasting on Validation Data & Select Best Model
+
+
+```{r}
+# Forecasting on Validation Data
+forecast_Var05_auto_val <- forecast(fit_Var05_auto, h = nrow(val))
+forecast_Var05_ets_val <- forecast(fit_Var05_ets, h = nrow(val))
+forecast_Var07_auto_val <- forecast(fit_Var07_auto, h = nrow(val))
+forecast_Var07_ets_val <- forecast(fit_Var07_ets, h = nrow(val))
+
+# Function to calculate accuracy
+calculate_accuracy <- function(forecast, actual) {
+  accuracy(forecast, actual)
+}
+
+# Calculate accuracy for each forecast
+accuracy_Var05_auto_val <- calculate_accuracy(forecast_Var05_auto_val, val$Var05)
+accuracy_Var05_ets_val <- calculate_accuracy(forecast_Var05_ets_val, val$Var05)
+accuracy_Var07_auto_val <- calculate_accuracy(forecast_Var07_auto_val, val$Var07)
+accuracy_Var07_ets_val <- calculate_accuracy(forecast_Var07_ets_val, val$Var07)
+
+# Combine results into a single data frame
+accuracy_results <- bind_rows(
+  data.frame(Model = "ARIMA_Var05", RMSE = accuracy_Var05_auto_val["Test set", "RMSE"], MAPE = accuracy_Var05_auto_val["Test set", "MAPE"]),
+  data.frame(Model = "ETS_Var05", RMSE = accuracy_Var05_ets_val["Test set", "RMSE"], MAPE = accuracy_Var05_ets_val["Test set", "MAPE"]),
+  data.frame(Model = "ARIMA_Var07", RMSE = accuracy_Var07_auto_val["Test set", "RMSE"], MAPE = accuracy_Var07_auto_val["Test set", "MAPE"]),
+  data.frame(Model = "ETS_Var07", RMSE = accuracy_Var07_ets_val["Test set", "RMSE"], MAPE = accuracy_Var07_ets_val["Test set", "MAPE"])
+)
+
+# Display results
+accuracy_results
+
+# Residuals Check
+checkresiduals(fit_Var05_auto)
+checkresiduals(fit_Var05_ets)
+checkresiduals(fit_Var07_auto)
+checkresiduals(fit_Var07_ets)
+```
+
+
+RMSE (Root Mean Squared Error): Imagine throwing a ball at a target. RMSE tells you how far your throws are from the target, on average. Smaller numbers mean you are closer to the target more often.
+
+MAPE (Mean Absolute Percentage Error): Think about how much you miss the target compared to how far you threw the ball. Smaller percentages mean your throws are more accurate.
+
+Model Selection
+
+For Var05, despite the the ETS model performs better with a lower RMSE (3.827109), MAPE (5.913426), and better residuals (p-value = 0.2573). ARIMA may be preferable for Var05 due to the better handling of trends and seasonality, as indicated by its residual analysis.
+
+For Var07, despite the ETS model also performs better with a lower RMSE (3.762379), MAPE (5.840729),  decide to apply ARIMA for more reliable forecast
+
+# Retrain the selected model with entire training set.
+```{r}
+# Refit the selected models on the entire dataset
+
+fit_Var05_final <- Arima(S06$Var05, c(3,1,2), seasonal = c(1,0,1), include.drift = TRUE)
+fit_Var07_final <- Arima(S06$Var07, order = c(3,1,2), seasonal = c(1,0,1), include.drift = TRUE)
+
+```
+
+# Forecast140P
+```{r}
+# Forecast Var05
+forecast_Var05_auto <- forecast(fit_Var05_final, h = 140)
+
+# Forecast Var07
+forecast_Var07_auto <- forecast(fit_Var07_final, h = 140)
+
+# Plot forecasts
+autoplot(forecast_Var05_auto) + ggtitle("S06 Var05 \n ARIMA 140 periods Forecast")
+
+autoplot(forecast_Var07_auto) + ggtitle("S06 Var07 \n ARIMA 140 periods Forecast")
+
+```
+
+# Export Forecast
+```{r}
+# Filter the data for SeriesIND >= 43022 and sort it
+prediction_label_S06 <- data %>% filter(SeriesInd >= 43022 & category == 'S06') %>%
+  arrange(SeriesInd) %>%
+  select(SeriesInd)
+
+# Create a data frame with forecasted values for the next 140 periods for S06
+forecast_data <- data.frame(
+  SeriesInd = prediction_label_S06$SeriesInd,
+  category = rep("S06", 140),
+  Var05 = forecast_Var05_auto$mean,
+  Var07 = forecast_Var07_auto$mean
+)
+
+
+#forecast_data
+write.csv(forecast_data, "S06_140PeriodForecast.csv", row.names = FALSE)
+
+```
+
