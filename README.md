@@ -1,4 +1,4 @@
-# Data-Analysis---Stock-Price-Prediction-using-ARIMA
+# Stock-Price-Prediction-using-ARIMA
 
 
 Implemented ARIMA for accurate stock price forecasting, showcasing time series expertise, vital for financial forecasting, strategic planning, in operation environments
