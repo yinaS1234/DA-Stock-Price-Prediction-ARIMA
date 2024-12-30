@@ -4,7 +4,7 @@
 Implemented ARIMA for accurate stock price forecasting, showcasing time series expertise, vital for financial forecasting, strategic planning, in operation environments
 
 
-![1](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/1.png)
+![1](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resrouces/1.png)
 
 
 
