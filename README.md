@@ -7,7 +7,7 @@ Implemented ARIMA for accurate stock price forecasting, showcasing time series e
 
 
 
-![1](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/1.png)
+![1.png](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/1.png)
 ![Visualization 2](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/2.png)
 ![Visualization 3](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/3.png)
 ![Visualization 4](https://github.com/yinaS1234/Stock-Price-Prediction-ARIMA-DA/blob/main/Resources/4.png)
